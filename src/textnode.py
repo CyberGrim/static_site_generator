@@ -20,6 +20,9 @@ class TextNode():
             return True
         else:
             return False
+    
+    def __hash__(self):
+        return hash((self.text, self.text_type, self.url))
         
     def __repr__(self):
         return f"TextNode({self.text}, {self.text_type.value}, {self.url})"
