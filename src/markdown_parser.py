@@ -89,11 +89,3 @@ def text_to_textnodes(text):
     final_nodes = split_nodes_delimiter(bold_nodes, "_", TextType.ITALIC)
 
     return final_nodes
-
-def main():
-    sample_text = "This is **text** with an _italic_ word and a `code block` and an ![obi wan image](https://i.imgur.com/fJRm4Vk.jpeg) and a [link](https://boot.dev)"
-    output = text_to_textnodes(sample_text)
-    print(output)
-
-if __name__ == "__main__":
-    main()
