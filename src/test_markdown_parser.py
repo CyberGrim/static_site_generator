@@ -5,7 +5,8 @@ from markdown_parser import (
     extract_markdown_images, 
     extract_markdown_links,
     split_nodes_image,
-    split_nodes_link
+    split_nodes_link,
+    text_to_textnodes
 )
 
 
@@ -58,6 +59,34 @@ class TestSplitNodesDelimiter(unittest.TestCase):
         self.assertEqual(len(new_nodes), 2)
         self.assertEqual(new_nodes[0].text, "Before ")
         self.assertEqual(new_nodes[1].text, " after")
+
+    def test_empty_delimited_content_behavior(self):
+        """Test that empty delimited content behavior is consistent."""
+        # Code delimiters currently ignore empty content (creates 2 nodes)
+        node = TextNode("Before `` after", TextType.TEXT)
+        result = split_nodes_delimiter([node], "`", TextType.CODE)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].text, "Before ")
+        self.assertEqual(result[1].text, " after")
+        
+        # This is inconsistent with other delimiters which raise exceptions
+        # TODO: Consider making this consistent across all delimiters
+
+    def test_missing_closing_delimiters(self):
+        """Test that missing closing delimiters raise exceptions."""
+        test_cases = [
+            ("Before ** after", "**", TextType.BOLD),
+            ("Before __ after", "__", TextType.BOLD),
+            ("Before _ after", "_", TextType.ITALIC),
+            ("Before ` after", "`", TextType.CODE),
+        ]
+        
+        for text, delimiter, text_type in test_cases:
+            with self.subTest(text=text, delimiter=delimiter):
+                node = TextNode(text, TextType.TEXT)
+                with self.assertRaises(Exception) as context:
+                    split_nodes_delimiter([node], delimiter, text_type)
+                self.assertTrue("invalid syntax" in str(context.exception).lower())
 
     def test_preserve_non_text_nodes(self):
         """Test that non-TEXT nodes are preserved."""
@@ -375,6 +404,74 @@ class TestSplitNodesImage(unittest.TestCase):
         text_nodes = [n for n in result if n.text_type == TextType.TEXT]
         self.assertTrue(any("[link](url.com)" in n.text for n in text_nodes))
 
+    def test_back_to_back_images(self):
+        """Test back-to-back image patterns."""
+        text = "![img1](url1)![img2](url2)"
+        node = TextNode(text, TextType.TEXT)
+        result = split_nodes_image([node])
+        
+        expected = [
+            TextNode("img1", TextType.IMAGE, "url1"),
+            TextNode("img2", TextType.IMAGE, "url2")
+        ]
+        self.assertEqual(result, expected)
+
+    def test_back_to_back_links(self):
+        """Test back-to-back link patterns."""
+        text = "[link1](url1)[link2](url2)"
+        node = TextNode(text, TextType.TEXT)
+        result = split_nodes_link([node])
+        
+        expected = [
+            TextNode("link1", TextType.LINK, "url1"),
+            TextNode("link2", TextType.LINK, "url2")
+        ]
+        self.assertEqual(result, expected)
+
+    def test_alternating_images_and_links(self):
+        """Test alternating image and link patterns."""
+        text = "![img1](url1)[link](url)![img2](url2)"
+        node = TextNode(text, TextType.TEXT)
+        
+        # Process images first
+        image_result = split_nodes_image([node])
+        expected_after_images = [
+            TextNode("img1", TextType.IMAGE, "url1"),
+            TextNode("[link](url)", TextType.TEXT),
+            TextNode("img2", TextType.IMAGE, "url2")
+        ]
+        self.assertEqual(image_result, expected_after_images)
+        
+        # Then process links
+        link_result = split_nodes_link(image_result)
+        expected_final = [
+            TextNode("img1", TextType.IMAGE, "url1"),
+            TextNode("link", TextType.LINK, "url"),
+            TextNode("img2", TextType.IMAGE, "url2")
+        ]
+        self.assertEqual(link_result, expected_final)
+
+    def test_link_then_image(self):
+        """Test link followed by image pattern."""
+        text = "[link](url)![img](url)"
+        node = TextNode(text, TextType.TEXT)
+        
+        # Process images first
+        image_result = split_nodes_image([node])
+        expected_after_images = [
+            TextNode("[link](url)", TextType.TEXT),
+            TextNode("img", TextType.IMAGE, "url")
+        ]
+        self.assertEqual(image_result, expected_after_images)
+        
+        # Then process links
+        link_result = split_nodes_link(image_result)
+        expected_final = [
+            TextNode("link", TextType.LINK, "url"),
+            TextNode("img", TextType.IMAGE, "url")
+        ]
+        self.assertEqual(link_result, expected_final)
+
 
 class TestSplitNodesLink(unittest.TestCase):
     """Test cases for split_nodes_link function."""
@@ -589,6 +686,240 @@ class TestMixedContentProcessing(unittest.TestCase):
             TextType.LINK, TextType.TEXT
         ]
         actual_types = [n.text_type for n in final_result]
+        self.assertEqual(actual_types, expected_types)
+
+
+class TestTextToTextnodes(unittest.TestCase):
+    """Test cases for the complete text_to_textnodes pipeline."""
+    
+    def test_basic_markdown_processing(self):
+        """Test basic markdown processing with all features."""
+        text = "This is **bold** and _italic_ text with `code` and ![img](url) and [link](url)"
+        result = text_to_textnodes(text)
+        
+        expected_types = [
+            TextType.TEXT, TextType.BOLD, TextType.TEXT, TextType.ITALIC, 
+            TextType.TEXT, TextType.CODE, TextType.TEXT, TextType.IMAGE, 
+            TextType.TEXT, TextType.LINK
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+    
+    def test_code_spans_protect_content(self):
+        """Test that code spans protect their content from other processing."""
+        text = "Text with `code with **bold** and [link](url)` more text"
+        result = text_to_textnodes(text)
+        
+        # Should have: text, code (with protected content), text
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[0].text_type, TextType.TEXT)
+        self.assertEqual(result[1].text_type, TextType.CODE)
+        self.assertEqual(result[1].text, "code with **bold** and [link](url)")
+        self.assertEqual(result[2].text_type, TextType.TEXT)
+    
+    def test_processing_order(self):
+        """Test that processing order is correct (code first, then images/links, then emphasis)."""
+        text = "`code` with ![img](url) and [link](url) and **bold** and _italic_"
+        result = text_to_textnodes(text)
+        
+        # Should process in order: code, images, links, bold, italic
+        expected_types = [
+            TextType.CODE, TextType.TEXT, TextType.IMAGE, TextType.TEXT, 
+            TextType.LINK, TextType.TEXT, TextType.BOLD, TextType.TEXT, TextType.ITALIC
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+    
+    def test_empty_alt_text_images(self):
+        """Test that empty alt text for images is handled correctly."""
+        text = "Text with ![](url) and ![alt](url) and [](url) and [link](url)"
+        result = text_to_textnodes(text)
+        
+        # Should have: text, image (empty alt), text, image (with alt), text, text, link
+        expected_types = [
+            TextType.TEXT, TextType.IMAGE, TextType.TEXT, TextType.IMAGE, 
+            TextType.TEXT, TextType.TEXT, TextType.LINK
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+        
+        # Check that empty alt text image was created
+        empty_alt_node = result[1]
+        self.assertEqual(empty_alt_node.text, "")
+        self.assertEqual(empty_alt_node.text_type, TextType.IMAGE)
+        self.assertEqual(empty_alt_node.url, "url")
+    
+    def test_empty_link_text_ignored(self):
+        """Test that empty link text is ignored."""
+        text = "Text with [](url) and [link](url)"
+        result = text_to_textnodes(text)
+        
+        # Should have: text, text, link (empty link text should be ignored)
+        expected_types = [TextType.TEXT, TextType.TEXT, TextType.LINK]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+    
+    def test_multiple_emphasis_levels(self):
+        """Test multiple levels of emphasis processing."""
+        text = "This is **bold** and _italic_ and `code`"
+        result = text_to_textnodes(text)
+        
+        expected_types = [
+            TextType.TEXT, TextType.BOLD, TextType.TEXT, TextType.ITALIC, 
+            TextType.TEXT, TextType.CODE
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+    
+    def test_adjacent_markdown(self):
+        """Test adjacent markdown elements."""
+        text = "![img](url)[link](url)**bold**_italic_`code`"
+        result = text_to_textnodes(text)
+        
+        expected_types = [
+            TextType.IMAGE, TextType.LINK, TextType.BOLD, TextType.ITALIC, TextType.CODE
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+    
+    def test_nested_markdown_in_code(self):
+        """Test that markdown inside code spans is not processed."""
+        text = "Text with `code **bold** and [link](url)` more text"
+        result = text_to_textnodes(text)
+        
+        # Should have: text, code (with unprocessed markdown), text
+        self.assertEqual(len(result), 3)
+        self.assertEqual(result[1].text_type, TextType.CODE)
+        self.assertEqual(result[1].text, "code **bold** and [link](url)")
+    
+    def test_unmatched_delimiters(self):
+        """Test that unmatched delimiters are handled gracefully."""
+        text = "Text with single _ underscore and **bold** and single * asterisk"
+        
+        # This should raise an exception due to unmatched delimiters
+        with self.assertRaises(Exception) as context:
+            text_to_textnodes(text)
+        self.assertTrue("invalid syntax" in str(context.exception).lower())
+    
+    def test_complex_mixed_content(self):
+        """Test complex content with all markdown types."""
+        text = "Start with `code` then ![img](url) and [link](url) then **bold** and _italic_ end"
+        result = text_to_textnodes(text)
+        
+        expected_types = [
+            TextType.TEXT, TextType.CODE, TextType.TEXT, TextType.IMAGE, 
+            TextType.TEXT, TextType.LINK, TextType.TEXT, TextType.BOLD, 
+            TextType.TEXT, TextType.ITALIC, TextType.TEXT
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+    
+    def test_plain_text(self):
+        """Test plain text without any markdown."""
+        text = "This is just plain text with no markdown"
+        result = text_to_textnodes(text)
+        
+        # Should return single text node
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].text_type, TextType.TEXT)
+        self.assertEqual(result[0].text, text)
+    
+    def test_only_markdown(self):
+        """Test text that is only markdown elements."""
+        text = "![img](url)[link](url)**bold**_italic_`code`"
+        result = text_to_textnodes(text)
+        
+        expected_types = [
+            TextType.IMAGE, TextType.LINK, TextType.BOLD, TextType.ITALIC, TextType.CODE
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+    
+    def test_no_empty_nodes_created(self):
+        """Test that no empty TextNodes are created."""
+        test_cases = [
+            "![img](url)[link](url)**bold**_italic_`code`",
+            "Text with `code` and **bold**",
+            "![img](url) text [link](url)",
+            "**bold** and _italic_"
+        ]
+        
+        for text in test_cases:
+            with self.subTest(text=text):
+                result = text_to_textnodes(text)
+                
+                # Check that no empty text nodes are created
+                for node in result:
+                    if node.text_type == TextType.TEXT:
+                        self.assertTrue(len(node.text) > 0, f"Empty TextNode found for text: {text}")
+    
+    def test_pipeline_order_preservation(self):
+        """Test that the pipeline preserves the order of elements."""
+        text = "First ![img](url) second [link](url) third **bold** fourth _italic_ fifth `code`"
+        result = text_to_textnodes(text)
+        
+        # Should preserve order: First, img, second, link, third, bold, fourth, italic, fifth, code
+        expected_texts = [
+            "First ", "img", " second ", "link", " third ", "bold", 
+            " fourth ", "italic", " fifth ", "code"
+        ]
+        actual_texts = [n.text for n in result]
+        self.assertEqual(actual_texts, expected_texts)
+    
+    def test_special_characters_in_content(self):
+        """Test special characters in markdown content."""
+        text = "Text with **bold <>&\"'** and _italic <>&\"'_ and `code <>&\"'`"
+        result = text_to_textnodes(text)
+        
+        # Should process all markdown types with special characters
+        expected_types = [
+            TextType.TEXT, TextType.BOLD, TextType.TEXT, TextType.ITALIC, 
+            TextType.TEXT, TextType.CODE
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+        
+        # Check that special characters are preserved
+        bold_node = result[1]
+        self.assertEqual(bold_node.text, "bold <>&\"'")
+        italic_node = result[3]
+        self.assertEqual(italic_node.text, "italic <>&\"'")
+        code_node = result[5]
+        self.assertEqual(code_node.text, "code <>&\"'")
+
+    def test_back_to_back_patterns_in_pipeline(self):
+        """Test back-to-back patterns in the full pipeline."""
+        text = "![img1](url1)![img2](url2)[link1](url1)[link2](url2)**bold1****bold2**"
+        result = text_to_textnodes(text)
+        
+        expected_types = [
+            TextType.IMAGE, TextType.IMAGE, TextType.LINK, TextType.LINK,
+            TextType.BOLD, TextType.BOLD
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+
+    def test_alternating_patterns_in_pipeline(self):
+        """Test alternating patterns in the full pipeline."""
+        text = "![img](url)[link](url)![img](url)[link](url)"
+        result = text_to_textnodes(text)
+        
+        expected_types = [
+            TextType.IMAGE, TextType.LINK, TextType.IMAGE, TextType.LINK
+        ]
+        actual_types = [n.text_type for n in result]
+        self.assertEqual(actual_types, expected_types)
+
+    def test_complex_alternating_patterns(self):
+        """Test complex alternating patterns with all markdown types."""
+        text = "![img](url)[link](url)**bold**_italic_`code`![img](url)[link](url)"
+        result = text_to_textnodes(text)
+        
+        expected_types = [
+            TextType.IMAGE, TextType.LINK, TextType.BOLD, TextType.ITALIC, 
+            TextType.CODE, TextType.IMAGE, TextType.LINK
+        ]
+        actual_types = [n.text_type for n in result]
         self.assertEqual(actual_types, expected_types)
 
 

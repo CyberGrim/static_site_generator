@@ -4,7 +4,7 @@ from textnode import TextNode, TextType
 def split_nodes_delimiter(old_nodes, delimiter, text_type):
     new_nodes = []
     for node in old_nodes:
-        if node.text_type is not TextType.TEXT:
+        if node.text_type != TextType.TEXT:
             new_nodes.append(node)
             continue
         node_parts = node.text.split(delimiter)
@@ -26,7 +26,7 @@ def extract_markdown_links(text):
 def split_nodes_image(old_nodes):
     new_nodes = []
     for node in old_nodes:
-        if node.text_type is not TextType.TEXT:
+        if node.text_type != TextType.TEXT:
             new_nodes.append(node)
             continue
         
@@ -54,7 +54,7 @@ def split_nodes_image(old_nodes):
 def split_nodes_link(old_nodes):
     new_nodes = []
     for node in old_nodes:
-        if node.text_type is not TextType.TEXT:
+        if node.text_type != TextType.TEXT:
             new_nodes.append(node)
             continue
         
@@ -71,10 +71,29 @@ def split_nodes_link(old_nodes):
                 if len(parts) == 2:
                     if parts[0]:
                         new_nodes.append(TextNode(parts[0], TextType.TEXT))
-                    new_nodes.append(TextNode(link_text, TextType.LINK, url))
+                    if link_text:
+                        new_nodes.append(TextNode(link_text, TextType.LINK, url))
                     text = parts[1]
         
         if text:
             new_nodes.append(TextNode(text, TextType.TEXT))
     
     return new_nodes
+
+def text_to_textnodes(text):
+    first_node = [TextNode(text, TextType.TEXT)]
+    code_nodes = split_nodes_delimiter(first_node, "`", TextType.CODE)
+    image_nodes = split_nodes_image(code_nodes)
+    link_nodes = split_nodes_link(image_nodes)
+    bold_nodes = split_nodes_delimiter(link_nodes, "**", TextType.BOLD)
+    final_nodes = split_nodes_delimiter(bold_nodes, "_", TextType.ITALIC)
+
+    return final_nodes
+
+def main():
+    sample_text = "This is **text** with an _italic_ word and a `code block` and an ![obi wan image](https://i.imgur.com/fJRm4Vk.jpeg) and a [link](https://boot.dev)"
+    output = text_to_textnodes(sample_text)
+    print(output)
+
+if __name__ == "__main__":
+    main()
