@@ -1,12 +1,15 @@
 import unittest
 from textnode import TextNode, TextType
 from markdown_parser import (
+    BlockType,
     split_nodes_delimiter, 
     extract_markdown_images, 
     extract_markdown_links,
     split_nodes_image,
     split_nodes_link,
-    text_to_textnodes
+    text_to_textnodes,
+    markdown_to_blocks,
+    block_to_block_type
 )
 
 
@@ -921,6 +924,95 @@ class TestTextToTextnodes(unittest.TestCase):
         ]
         actual_types = [n.text_type for n in result]
         self.assertEqual(actual_types, expected_types)
+
+class TestMarkdownToBlocks(unittest.TestCase):
+    def test_markdown_to_blocks(self):
+        md = """
+This is **bolded** paragraph
+
+This is another paragraph with _italic_ text and `code` here
+This is the same paragraph on a new line
+
+- This is a list
+- with items
+"""
+        blocks = markdown_to_blocks(md)
+        self.assertEqual(
+            blocks,
+            [
+                "This is **bolded** paragraph",
+                "This is another paragraph with _italic_ text and `code` here\nThis is the same paragraph on a new line",
+                "- This is a list\n- with items",
+            ],
+        )
+
+    def test_with_multiple_newlines(self):
+        md = "Block 1\n\n\n\nBlock 2"
+        blocks = markdown_to_blocks(md)
+        self.assertEqual(blocks, ["Block 1", "Block 2"])
+
+    def test_leading_and_trailing_whitespace(self):
+        md = "  \n\n  Block 1  \n\n  Block 2  \n\n  "
+        blocks = markdown_to_blocks(md)
+        self.assertEqual(blocks, ["Block 1", "Block 2"])
+
+    def test_empty_blocks(self):
+        md = "Block 1\n\n\n  \n\nBlock 2"
+        blocks = markdown_to_blocks(md)
+        self.assertEqual(blocks, ["Block 1", "Block 2"])
+
+    def test_single_block(self):
+        md = "This is just one block."
+        blocks = markdown_to_blocks(md)
+        self.assertEqual(blocks, ["This is just one block."])
+
+    def test_empty_input(self):
+        md = ""
+        blocks = markdown_to_blocks(md)
+        self.assertEqual(blocks, [])
+
+    def test_whitespace_input(self):
+        md = "   \n\n   \n "
+        blocks = markdown_to_blocks(md)
+        self.assertEqual(blocks, [])
+
+class TestBlockToBlockType(unittest.TestCase):
+    def test_headings(self):
+        self.assertEqual(block_to_block_type("# A valid heading"), BlockType.HEADING)
+        self.assertEqual(block_to_block_type("###### A valid heading"), BlockType.HEADING)
+        self.assertEqual(block_to_block_type("####### Not a heading"), BlockType.PARAGRAPH)
+        self.assertEqual(block_to_block_type("#NoSpace"), BlockType.PARAGRAPH)
+        self.assertEqual(block_to_block_type("# "), BlockType.PARAGRAPH)
+
+    def test_code_blocks(self):
+        self.assertEqual(block_to_block_type("```\ncode\n```"), BlockType.CODE)
+        self.assertEqual(block_to_block_type("```python\ncode\nmore code\n```"), BlockType.CODE)
+        self.assertEqual(block_to_block_type("```\n```"), BlockType.PARAGRAPH, "Code block must be at least 3 lines")
+        self.assertEqual(block_to_block_type("```code```"), BlockType.PARAGRAPH, "Single-line code is a paragraph")
+        self.assertEqual(block_to_block_type("```\ncode"), BlockType.PARAGRAPH, "Missing closing fence")
+
+    def test_quote_blocks(self):
+        self.assertEqual(block_to_block_type("> line 1\n> line 2"), BlockType.QUOTE)
+        self.assertEqual(block_to_block_type("> just one line"), BlockType.QUOTE)
+        self.assertEqual(block_to_block_type("> line 1\nnot a quote"), BlockType.PARAGRAPH)
+        self.assertEqual(block_to_block_type("> line 1\n>\n> line 3"), BlockType.QUOTE, "Should handle blank lines in quotes")
+
+    def test_unordered_lists(self):
+        self.assertEqual(block_to_block_type("- item 1\n- item 2"), BlockType.UNORDERED_LIST)
+        self.assertEqual(block_to_block_type("- item 1"), BlockType.UNORDERED_LIST)
+        self.assertEqual(block_to_block_type("* item 1"), BlockType.PARAGRAPH, "Should not match * lists")
+        self.assertEqual(block_to_block_type("- item 1\nitem 2"), BlockType.PARAGRAPH)
+
+    def test_ordered_lists(self):
+        self.assertEqual(block_to_block_type("1. item 1\n2. item 2\n3. item 3"), BlockType.ORDERED_LIST)
+        self.assertEqual(block_to_block_type("1. item 1"), BlockType.ORDERED_LIST)
+        self.assertEqual(block_to_block_type("1. item 1\n3. item 3"), BlockType.PARAGRAPH, "Should fail on skipped number")
+        self.assertEqual(block_to_block_type("2. item 1"), BlockType.PARAGRAPH, "Should fail on wrong start number")
+        self.assertEqual(block_to_block_type("1) item 1\n2) item 2"), BlockType.PARAGRAPH, "Should fail on wrong delimiter")
+
+    def test_paragraphs(self):
+        self.assertEqual(block_to_block_type("This is a simple paragraph."), BlockType.PARAGRAPH)
+        self.assertEqual(block_to_block_type("1. list\n- not a list"), BlockType.PARAGRAPH, "Mixed types should be a paragraph")
 
 
 if __name__ == "__main__":

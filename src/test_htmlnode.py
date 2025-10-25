@@ -28,6 +28,19 @@ class TestHTMLNode(unittest.TestCase):
         with self.assertRaises(NotImplementedError):
             node.to_html()
 
+    def test_repr_with_children_and_props(self):
+        child1 = LeafNode("b", "Bold text")
+        child2 = LeafNode("i", "Italic text")
+        parent = ParentNode("p", [child1, child2], props={"class": "my-paragraph"})
+        expected_repr_string = "ParentNode(tag=p, children=[LeafNode(tag=b, value=Bold text, props={}), LeafNode(tag=i, value=Italic text, props={})], props={'class': 'my-paragraph'})"
+        self.assertEqual(repr(parent), expected_repr_string)
+
+    def test_repr_with_no_props(self):
+        child = LeafNode("span", "Content")
+        parent = ParentNode("div", [child]) # props is None
+        expected_repr_string = "ParentNode(tag=div, children=[LeafNode(tag=span, value=Content, props={})], props={})"
+        self.assertEqual(repr(parent), expected_repr_string)
+
 class TestLeafNode(unittest.TestCase):
     def test_leaf_to_html_p(self):
         node = LeafNode("p", "This is a paragraph!")
